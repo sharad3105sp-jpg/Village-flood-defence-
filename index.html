@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Village Flood Defense</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+        body { background: #4a3319; font-family: sans-serif; overflow: hidden; color: white; }
+        
+        #ui-layer { position: absolute; top: 0; left: 0; width: 100%; padding: 10px; z-index: 10; display: flex; justify-content: space-between; background: rgba(0,0,0,0.5); }
+        .stat { font-size: 16px; font-weight: bold; margin-bottom: 3px; }
+        
+        #controls-container { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); z-index: 10; display: flex; flex-direction: column; gap: 8px; width: 95%; max-width: 500px; align-items: center; }
+        #shop { display: flex; gap: 8px; background: rgba(0,0,0,0.7); padding: 8px; border-radius: 8px; width: 100%; justify-content: center; }
+        .shop-btn { background: #e67e22; border: none; color: white; padding: 6px 10px; border-radius: 5px; font-weight: bold; font-size: 11px; cursor: pointer; text-align: center; flex: 1; }
+        .shop-btn.active { border: 2px solid white; box-shadow: 0 0 10px #fff; }
+        .shop-btn:disabled { background: #7f8c8d; cursor: not-allowed; }
+
+        #ad-container { width: 100%; display: flex; justify-content: center; }
+        .ad-btn { background: #f1c40f; border: none; color: #2c3e50; padding: 10px 20px; border-radius: 20px; font-weight: bold; font-size: 14px; cursor: pointer; width: 80%; box-shadow: 0 4px 6px rgba(0,0,0,0.3); text-align: center; }
+        .ad-btn:disabled { background: #7f8c8d; color: #bdc3c7; cursor: not-allowed; }
+
+        #gameCanvas { display: block; background: #855e42; }
+
+        .modal { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.9); padding: 20px; border-radius: 10px; text-align: center; z-index: 20; display: none; width: 80%; max-width: 400px; border: 2px solid #e67e22; }
+        .modal h2 { margin-bottom: 15px; color: #e67e22; }
+        .modal p { margin-bottom: 15px; }
+        .modal button { background: #27ae60; color: white; border: none; padding: 10px 20px; font-size: 16px; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        
+        #ad-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: black; z-index: 30; display: none; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
+        #ad-overlay h2 { color: #f1c40f; margin-bottom: 10px; }
+        #ad-countdown { font-size: 48px; font-weight: bold; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div>
+            <div class="stat" id="lbl-level">Level: 1</div>
+            <div class="stat" id="lbl-coins">Coins: 200</div>
+        </div>
+        <div style="text-align: right;">
+            <div class="stat" id="lbl-timer">Time Left: 20s</div>
+            <div class="stat" id="lbl-material">Selected: Brick</div>
+        </div>
+    </div>
+
+    <div id="controls-container">
+        <div id="shop">
+            <button class="shop-btn active" id="btn-brick" onclick="selectMaterial('brick')">Brick<br>(10 Coins)</button>
+            <button class="shop-btn" id="btn-concrete" onclick="selectMaterial('concrete')" disabled>Concrete<br>(50 Coins)</button>
+            <button class="shop-btn" id="btn-steel" onclick="selectMaterial('steel')" disabled>Steel<br>(1 Coin/kg)</button>
+        </div>
+        <div id="ad-container">
+            <button class="ad-btn" id="btn-watch-ad" onclick="watchAd()">📺 Watch Ad (+500 Coins)</button>
+        </div>
+    </div>
+
+    <div id="screen-modal" class="modal">
+        <h2 id="modal-title">Game Over</h2>
+        <p id="modal-text">The village was submerged!</p>
+        <button id="modal-btn" onclick="closeModal()">Try Again</button>
+    </div>
+
+    <div id="ad-overlay">
+        <h2>Advertisement Playing</h2>
+        <p>Please wait 30 seconds to claim your reward...</p>
+        <div id="ad-countdown">30</div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        // Game State Variables
+        let gameState = "PLAYING"; 
+        let currentLevel = 1;
+        let coins = 200; 
+        let timeLeft = 20; 
+        let timerInterval;
+        let selectedMaterial = "brick";
+
+        let houses = [];
+        let trees = [];
+        let waterParticles = [];
+        let placedDams = [];
+
+        // Cost Configurations
+        const COSTS = { brick: 10, concrete: 50, steel: 1 }; 
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            initMap();
+        }
+
+        function initMap() {
+            houses = [];
+            trees = [];
+            // Spawn 10 houses in the upper area
+            for(let i=0; i<10; i++) {
+                houses.push({
+                    x: (canvas.width * 0.1) + (i * (canvas.width * 0.08)) + (Math.random()*15),
+                    y: 80 + (Math.random() * 120),
+                    w: 35, h: 30
+                });
+            }
+            // Spawn trees
+            for(let i=0; i<35; i++) {
+                trees.push({
+                    x: Math.random() * canvas.width,
+                    y: 60 + Math.random() * 200,
+                    r: 10 + Math.random()*8
+                });
+            }
+        }
+
+        function startLevel() {
+            gameState = "PLAYING";
+            timeLeft = 20;
+            waterParticles = [];
+            placedDams = [];
+            
+            // Level features check
+            document.getElementById("btn-concrete").disabled = currentLevel < 2;
+            document.getElementById("btn-steel").disabled = currentLevel < 2;
+            if (currentLevel < 2) selectMaterial('brick');
+
+            document.getElementById("lbl-level").innerText = "Level: " + currentLevel;
+            document.getElementById("lbl-coins").innerText = "Coins: " + coins;
+            
+            clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                if(gameState === "PLAYING") {
+                    timeLeft--;
+                    document.getElementById("lbl-timer").innerText = "Time Left: " + timeLeft + "s";
+                    if(timeLeft <= 0) winLevel();
+                }
+            }, 1000);
+        }
+
+        function selectMaterial(type) {
+            selectedMaterial = type;
+            document.querySelectorAll(".shop-btn").forEach(btn => btn.classList.remove("active"));
+            document.getElementById("btn-" + type).classList.add("active");
+            document.getElementById("lbl-material").innerText = "Selected: " + type.toUpperCase();
+        }
+
+        // Logic to simulate watching a 30-second ad
+        function watchAd() {
+            // Pause game loops and main timer
+            let savedGameState = gameState;
+            gameState = "AD_PLAYING";
+            clearInterval(timerInterval);
+
+            // Show Ad Screen overlay
+            const adOverlay = document.getElementById("ad-overlay");
+            const adCountdown = document.getElementById("ad-countdown");
+            adOverlay.style.display = "flex";
+
+            let adTimeLeft = 30;
+            adCountdown.innerText = adTimeLeft;
+
+            let adInterval = setInterval(() => {
+                adTimeLeft--;
+                adCountdown.innerText = adTimeLeft;
+
+                if (adTimeLeft <= 0) {
+                    clearInterval(adInterval);
+                    adOverlay.style.display = "none";
+                    
+                    // Reward the player 500 coins
+                    coins += 500;
+                    document.getElementById("lbl-coins").innerText = "Coins: " + coins;
+                    
+                    // Resume game state
+                    gameState = savedGameState;
+                    if (gameState === "PLAYING") {
+                        timerInterval = setInterval(() => {
+                            timeLeft--;
+                            document.getElementById("lbl-timer").innerText = "Time Left: " + timeLeft + "s";
+                            if(timeLeft <= 0) winLevel();
+                        }, 1000);
+                    }
+                }
+            }, 1000);
+        }
+
+        // Click or Tap handling to place structures
+        canvas.addEventListener("click", (e) => {
+            if(gameState !== "PLAYING") return;
+            
+            // Don't build if clicking on buttons
+            if (e.clientY > window.innerHeight - 120) return;
+
+            let cost = COSTS[selectedMaterial];
+            if(selectedMaterial === "steel") cost = 500; // 500kg unit size requirement
+
+            if(coins >= cost) {
+                coins -= cost;
+                document.getElementById("lbl-coins").innerText = "Coins: " + coins;
+                
+                placedDams.push({
+                    x: e.clientX,
+                    y: e.clientY,
+                    type: selectedMaterial,
+                    hp: selectedMaterial === "steel" ? 300 : selectedMaterial === "concrete" ? 150 : 60,
+                    r: selectedMaterial === "steel" ? 25 : 18
+                });
+            }
+        });
+
+        function spawnWater() {
+            if(gameState !== "PLAYING") return;
+            let spawnCount = currentLevel === 1 ? 1 : 3; 
+            for(let i=0; i<spawnCount; i++) {
+                waterParticles.push({
+                    x: Math.random() * canvas.width,
+                    y: canvas.height + 10,
+                    speed: (currentLevel === 1 ? 1.5 : 3.2) + Math.random(),
+                    r: 12
+                });
+            }
+        }
+
+        function winLevel() {
+            gameState = "WIN";
+            clearInterval(timerInterval);
+            let prize = 100 * Math.pow(2, currentLevel - 1); 
+            coins += prize;
+            
+            showModal("Level Complete!", `You successfully protected the village! You earned ${prize} coins.`);
+            currentLevel++;
+            document.getElementById("modal-btn").innerText = "Next Level";
+        }
+
+        function loseLevel() {
+            gameState = "LOSE";
+            clearInterval(timerInterval);
+            let consolation = (100 * Math.pow(2, currentLevel - 1)) / 2; 
+            coins += consolation;
+
+            showModal("Game Over", `The village flooded! Consolation prize awarded: ${consolation} coins.`);
+            document.getElementById("modal-btn").innerText = "Try Again";
+        }
+
+        function showModal(title, text) {
+            document.getElementById("modal-title").innerText = title;
+            document.getElementById("modal-text").innerText = text;
+            document.getElementById("screen-modal").style.display = "block";
+        }
+
+        function closeModal() {
+            document.getElementById("screen-modal").style.display = "none";
+            startLevel();
+        }
+
+        function update() {
+            if(gameState === "PLAYING") {
+                if(Math.random() < 0.15) spawnWater();
+
+                for(let i = waterParticles.length - 1; i >= 0; i--) {
+                    let wp = waterParticles[i];
+                    wp.y -= wp.speed;
+
+                    // Collision with dams
+                    for(let j = placedDams.length - 1; j >= 0; j--) {
+                        let dam = placedDams[j];
+                        let dist = Math.hypot(wp.x - dam.x, wp.y - dam.y);
+                        if(dist < wp.r + dam.r) {
+                            waterParticles.splice(i, 1);
+                            dam.hp -= 1;
+                            if(dam.hp <= 0) placedDams.splice(j, 1);
+                            return;
+                        }
+                    }
+
+                    // Collision with houses
+                    for(let house of houses) {
+                        if(wp.x > house.x && wp.x < house.x + house.w && wp.y > house.y && wp.y < house.y + house.h) {
+                            loseLevel();
+                            return;
+                        }
+                    }
+
+                    if(wp.y < 0) waterParticles.splice(i, 1);
+                }
+            }
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Draw Background Field
+            ctx.fillStyle = "#5c913b";
+            ctx.fillRect(0, 0, canvas.width, 320);
+
+            // Draw Trees
+            ctx.fillStyle = "#27ae60";
+            for(let tree of trees) {
+                ctx.beginPath();
+                ctx.arc(tree.x, tree.y, tree.r, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // Draw Houses
+            for(let house of houses) {
+                ctx.fillStyle = "#d35400";
+                ctx.fillRect(house.x, house.y, house.w, house.h);
+                ctx.fillStyle = "#c0392b";
+                ctx.beginPath();
+                ctx.moveTo(house.x - 4, house.y);
+                ctx.lineTo(house.x + (house.w/2), house.y - 12);
+                ctx.lineTo(house.x + house.w + 4, house.y);
+                ctx.fill();
+            }
+
+            // Draw Dams
+            for(let dam of placedDams) {
+                if(dam.type === "brick") ctx.fillStyle = "#b03a2e";
+                else if(dam.type === "concrete") ctx.fillStyle = "#7f8c8d";
+                else ctx.fillStyle = "#2c3e50";
+
+                ctx.beginPath();
+                ctx.arc(dam.x, dam.y, dam.r, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            // Draw Water Particles
+            ctx.fillStyle = "rgba(41, 128, 185, 0.8)";
+            for(let wp of waterParticles) {
+                ctx.beginPath();
+                ctx.arc(wp.x, wp.y, wp.r, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function loop() {
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+
+        window.addEventListener("resize", resizeCanvas);
+        resizeCanvas();
+        startLevel();
+        loop();
+    </script>
+</body>
+</html>
